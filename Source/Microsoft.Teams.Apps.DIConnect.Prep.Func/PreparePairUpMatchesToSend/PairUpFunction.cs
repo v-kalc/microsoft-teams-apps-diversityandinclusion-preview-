@@ -27,31 +27,18 @@ namespace Microsoft.Teams.Apps.DIConnect.Prep.Func.PreparePairUpMatchesToSend
         /// <returns>A <see cref="Task"/>Representing the asynchronous operation.</returns>
         [FunctionName(FunctionNames.PairUpFunction)]
         public async Task Run(
-            [TimerTrigger("0 30 09 * * *")] TimerInfo myTimer,
+            [TimerTrigger("0 */120 * * * *")] TimerInfo myTimer,
             [DurableClient] IDurableOrchestrationClient starter,
             ILogger log)
         {
             log.LogInformation($"DI Connect pair up function executed at: {DateTime.UtcNow}");
 
-            if (DateTime.UtcNow.DayOfWeek == DayOfWeek.Monday)
-            {
-                // Start PrepareBatchesToSendOrchestrator function.
-                string instanceId = await starter.StartNewAsync(
-                    FunctionNames.PrepareBatchesToSendOrchestrator,
-                    MatchingFrequency.Weekly.ToString());
+            // Start PrepareBatchesToSendOrchestrator function.
+            string instanceId = await starter.StartNewAsync(
+                FunctionNames.PrepareBatchesToSendOrchestrator,
+                MatchingFrequency.Monthly.ToString());
 
-                log.LogInformation($"Sending user pair-up matches on weekly basis with started orchestration of ID = '{instanceId}'.");
-            }
-
-            if (DateTime.UtcNow.Day == 1)
-            {
-                // Start PrepareBatchesToSendOrchestrator function.
-                string instanceId = await starter.StartNewAsync(
-                    FunctionNames.PrepareBatchesToSendOrchestrator,
-                    MatchingFrequency.Monthly.ToString());
-
-                log.LogInformation($"Sending user pair-up matches on monthly basis with started orchestration of ID = '{instanceId}'.");
-            }
+            log.LogInformation($"Sending user pair-up matches on monthly basis with started orchestration of ID = '{instanceId}'.");
         }
     }
 }

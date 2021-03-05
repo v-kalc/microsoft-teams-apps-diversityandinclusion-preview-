@@ -21,14 +21,14 @@ namespace Microsoft.Teams.Apps.DIConnect.Prep.Func.PreparePairUpMatchesToSend.Ac
     public class SendPairUpMatchesActivity
     {
         /// <summary>
-        /// The maximum number of messages that can be in one batch request to the service bus queue.
-        /// </summary>
-        private readonly int maxNumberOfMessagesInBatchRequest = 100;
-        
-        /// <summary>
         /// User pair-up queue service.
         /// </summary>
         private readonly UserPairUpQueue userPairUpQueue;
+
+        /// <summary>
+        /// The maximum number of messages that can be in one batch request to the service bus queue.
+        /// </summary>
+        private readonly int maxNumberOfMessagesInBatchRequest = 100;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="SendPairUpMatchesActivity"/> class.
@@ -91,15 +91,12 @@ namespace Microsoft.Teams.Apps.DIConnect.Prep.Func.PreparePairUpMatchesToSend.Ac
                 });
 
                 log.LogInformation($"Send user pair-up matches to queue");
-                log.LogInformation($"Send user pair-up matches to queue");
                 var batchCount = (int)Math.Ceiling((double)messageBatch.Count() / this.maxNumberOfMessagesInBatchRequest);
                 for (int batchIndex = 0; batchIndex < batchCount; batchIndex++)
                 {
                     var batchWisePairUpMatches = messageBatch
                     .Skip(batchIndex * this.maxNumberOfMessagesInBatchRequest)
                     .Take(this.maxNumberOfMessagesInBatchRequest);
-
- 
 
                     await this.userPairUpQueue.SendAsync(batchWisePairUpMatches.Where(row => row != null));
                 }

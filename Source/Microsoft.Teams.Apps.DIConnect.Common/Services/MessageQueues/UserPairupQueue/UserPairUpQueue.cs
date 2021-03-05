@@ -15,7 +15,7 @@ namespace Microsoft.Teams.Apps.DIConnect.Common.Services.MessageQueues.UserPairu
         /// <summary>
         /// Queue name of the data queue.
         /// </summary>
-        public const string QueueName = "user-pairup-data";
+        public const string QueueName = "testqueue";
 
         /// <summary>
         /// Initializes a new instance of the <see cref="UserPairUpQueue"/> class.

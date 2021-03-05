@@ -27,7 +27,7 @@ namespace Microsoft.Teams.Apps.DIConnect.Prep.Func.PreparePairUpMatchesToSend
         /// <returns>A <see cref="Task"/>Representing the asynchronous operation.</returns>
         [FunctionName(FunctionNames.PairUpFunction)]
         public async Task Run(
-            [TimerTrigger("0 */600 * * * *")] TimerInfo myTimer,
+            [TimerTrigger("0 */620 * * * *")] TimerInfo myTimer,
             [DurableClient] IDurableOrchestrationClient starter,
             ILogger log)
         {

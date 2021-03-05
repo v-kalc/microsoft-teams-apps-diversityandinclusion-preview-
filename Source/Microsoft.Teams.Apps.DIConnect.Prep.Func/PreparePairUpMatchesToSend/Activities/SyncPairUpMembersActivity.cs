@@ -1,4 +1,4 @@
-﻿// <copyright file="SyncPairUpMembersActivity.cs" company="Microsoft Corporation">
+﻿// <copyright file="SendPairUpMatchesActivity.cs" company="Microsoft Corporation">
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 // </copyright>
@@ -6,105 +6,149 @@
 namespace Microsoft.Teams.Apps.DIConnect.Prep.Func.PreparePairUpMatchesToSend.Activities
 {
     using System;
+    using System.Collections.Generic;
+    using System.Linq;
     using System.Threading.Tasks;
     using Microsoft.Azure.WebJobs;
     using Microsoft.Azure.WebJobs.Extensions.DurableTask;
     using Microsoft.Extensions.Logging;
-    using Microsoft.Extensions.Options;
-    using Microsoft.Identity.Client;
-    using Microsoft.Teams.Apps.DIConnect.Common.Repositories.EmployeeResourceGroup;
-    using Microsoft.Teams.Apps.DIConnect.Common.Repositories.UserPairupMapping;
-    using Microsoft.Teams.Apps.DIConnect.Common.Services;
-    using Microsoft.Teams.Apps.DIConnect.Common.Services.Teams;
+    using Microsoft.Teams.Apps.DIConnect.Common.Services.MessageQueues.UserPairupQueue;
     using Microsoft.Teams.Apps.DIConnect.Prep.Func.PreparingToSend;
 
     /// <summary>
-    /// Syncs pair up members to team user pair up mapping repository table.
+    /// Sends pair up matches to user pair-up queue.
     /// </summary>
-    public class SyncPairUpMembersActivity
+    public class SendPairUpMatchesActivity
     {
         /// <summary>
-        /// Team members service.
+        /// User pair-up queue service.
         /// </summary>
-        private readonly ITeamMembersService memberService;
+        private readonly UserPairUpQueue userPairUpQueue;
 
         /// <summary>
-        /// App setting service.
+        /// The maximum number of messages that can be in one batch request to the service bus queue.
         /// </summary>
-        private readonly IAppSettingsService appSettingsService;
+        private readonly int maxNumberOfMessagesInBatchRequest = 100;
 
         /// <summary>
-        /// Repository for team user pair-up mapping.
+        /// Initializes a new instance of the <see cref="SendPairUpMatchesActivity"/> class.
         /// </summary>
-        private readonly TeamUserPairUpMappingRepository teamUserPairUpMappingRepository;
-
-        /// <summary>
-        /// A set of key/value application configuration properties for application settings.
-        /// </summary>
-        private readonly IOptions<ConfidentialClientApplicationOptions> options;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="SyncPairUpMembersActivity"/> class.
-        /// </summary>
-        /// <param name="memberService">Teams member service.</param>
-        /// <param name="appSettingsService">App settings service.</param>
-        /// <param name="teamUserPairUpMappingRepository">Team user pair-up mapping repository.</param>
-        /// <param name="options">A set of key/value application configuration properties for application settings.</param>
-        public SyncPairUpMembersActivity(
-            ITeamMembersService memberService,
-            IAppSettingsService appSettingsService,
-            TeamUserPairUpMappingRepository teamUserPairUpMappingRepository,
-            IOptions<ConfidentialClientApplicationOptions> options)
+        /// <param name="userPairUpQueue">User pair up queue service.</param>
+        public SendPairUpMatchesActivity(
+            UserPairUpQueue userPairUpQueue)
         {
-            this.memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
-            this.appSettingsService = appSettingsService ?? throw new ArgumentNullException(nameof(appSettingsService));
-            this.teamUserPairUpMappingRepository = teamUserPairUpMappingRepository ?? throw new ArgumentNullException(nameof(teamUserPairUpMappingRepository));
-            this.options = options ?? throw new ArgumentNullException(nameof(options));
+            this.userPairUpQueue = userPairUpQueue ?? throw new ArgumentNullException(nameof(userPairUpQueue));
         }
 
         /// <summary>
-        /// Syncs pair up members team user pair up mapping repository table.
+        /// Run the activity.
+        /// Sends pair up matches to user pair-up queue.
         /// </summary>
-        /// <param name="resourceGroupEntity">Input data.</param>
-        /// <param name="log">Logging service.</param>
-        /// <returns>A <see cref="Task"/>Representing the asynchronous operation.</returns>
-        [FunctionName(FunctionNames.SyncPairUpMembersActivity)]
+        /// <param name="input">Input.</param>
+        /// <param name="log">The logger.</param>
+        /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
+        [FunctionName(FunctionNames.SendPairUpMatchesActivity)]
         public async Task RunAsync(
-            [ActivityTrigger] EmployeeResourceGroupEntity resourceGroupEntity,
+            [ActivityTrigger](string teamId, List<TeamUserMapping> teamUserMappings) input,
             ILogger log)
         {
             try
             {
-                var serviceUrl = await this.appSettingsService.GetServiceUrlAsync();
-
-                // Get team members.
-                var userEntities = await this.memberService.GetMembersAsync(
-                    teamId: resourceGroupEntity.TeamId,
-                    tenantId: this.options.Value.TenantId,
-                    serviceUrl: serviceUrl);
-
-                foreach (var userEntity in userEntities)
+                var userPairUpMatches = this.PrepareMatches(input.teamUserMappings, log);
+                var messageBatch = userPairUpMatches.Select(
+                recipient =>
                 {
-                    // Get user details from mapping storage table if already exists.
-                    var userMapping = await this.teamUserPairUpMappingRepository.GetAsync(userEntity.AadId, resourceGroupEntity.TeamId);
-                    if (userMapping == null)
+                    try
                     {
-                        var mappingEntity = new TeamUserPairUpMappingEntity
+                        return new UserPairUpQueueMessageContent()
                         {
-                            TeamId = resourceGroupEntity.TeamId,
-                            UserObjectId = userEntity.AadId,
-                            IsPaused = false,
+                            // Assigning a unique GUID value to each pair-up notification.
+                            PairUpNotificationId = Guid.NewGuid().ToString(),
+                            TeamId = input.teamId,
+                            TeamName = recipient.Item1.TeamName,
+                            PairUpUserData = new UserPairsMessage()
+                            {
+                                Recipient1 = new UserData()
+                                {
+                                    UserGivenName = recipient.Item1?.UserGivenName,
+                                    UserPrincipalName = recipient.Item1?.UserPrincipalName,
+                                    UserObjectId = recipient.Item1.UserObjectId,
+                                },
+                                Recipient2 = new UserData()
+                                {
+                                    UserGivenName = recipient.Item2?.UserGivenName,
+                                    UserPrincipalName = recipient.Item2?.UserPrincipalName,
+                                    UserObjectId = recipient.Item2.UserObjectId,
+                                },
+                            },
                         };
-
-                        log.LogInformation($"Inserting pair-up entity into table storage: {userEntity.AadId}");
-                        await this.teamUserPairUpMappingRepository.CreateOrUpdateAsync(mappingEntity);
                     }
+                    catch (Exception ex)
+                    {
+                        log.LogError($"Unable to prepare pair-up matches: {ex.Message} for Team: {recipient.Item1.TeamId}");
+                        return null;
+                    }
+                });
+
+                log.LogInformation($"Send user pair-up matches to queue");
+                var batchCount = (int)Math.Ceiling((double)messageBatch.Count() / this.maxNumberOfMessagesInBatchRequest);
+                for (int batchIndex = 0; batchIndex < batchCount; batchIndex++)
+                {
+                    var batchWisePairUpMatches = messageBatch
+                    .Skip(batchIndex * this.maxNumberOfMessagesInBatchRequest)
+                    .Take(this.maxNumberOfMessagesInBatchRequest);
+
+                    await this.userPairUpQueue.SendAsync(batchWisePairUpMatches.Where(row => row != null));
                 }
             }
             catch (Exception ex)
             {
-                log.LogError($"Error while inserting pair-up matches: {ex.Message} for Team: {resourceGroupEntity.TeamId}");
+                log.LogError($"Unable to send user pair-up matches to queue: {ex.Message}");
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Prepare randomized pair-up matches.
+        /// </summary>
+        /// <param name="teamPairUpMatches">List of user pair-up mapping entity.</param>
+        /// <param name="log">The logger.</param>
+        /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
+        public List<Tuple<TeamUserMapping, TeamUserMapping>> PrepareMatches(List<TeamUserMapping> teamPairUpMatches, ILogger log)
+        {
+            var pairs = new List<Tuple<TeamUserMapping, TeamUserMapping>>();
+            this.Randomize(teamPairUpMatches);
+
+            if (teamPairUpMatches.Count > 0)
+            {
+                for (int i = 0; i < teamPairUpMatches.Count - 1; i += 2)
+                {
+                    pairs.Add(new Tuple<TeamUserMapping, TeamUserMapping>(teamPairUpMatches[i], teamPairUpMatches[i + 1]));
+                }
+            }
+
+            log.LogInformation($"Prepared matches to send notification message : {pairs.Count()}");
+
+            return pairs;
+        }
+
+        /// <summary>
+        /// Randomize list of users.
+        /// </summary>
+        /// <typeparam name="T">Generic item type.</typeparam>
+        /// <param name="items">List of users to randomize.</param>
+        private void Randomize<T>(IList<T> items)
+        {
+            Random rand = new Random(Guid.NewGuid().GetHashCode());
+
+            // For each spot in the array, pick
+            // a random item to swap into that spot.
+            for (int i = 0; i < items.Count - 1; i++)
+            {
+                int j = rand.Next(i, items.Count);
+                T temp = items[i];
+                items[i] = items[j];
+                items[j] = temp;
             }
         }
     }
